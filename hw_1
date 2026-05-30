@@ -1,0 +1,214 @@
+Создание хоста в Я-клауде
+      yc compute instance create \
+        --name nodea \
+        --hostname nodea \
+        --cores 2 \
+        --memory 2 \
+        --create-boot-disk size=15G,type=network-ssd,image-folder-id=standard-images,image-family=ubuntu-2404-lts \
+        --network-interface subnet-name=default-ru-central1-b,nat-ip-version=ipv4 \
+        --zone ru-central1-b \
+        --metadata-from-file ssh-keys=/home/aster/.ssh/id_rsa.pub
+
+Установка ПГ из репозитория 
+
+          denshuchmacher@nodea:~$  sudo apt -y install postgresql-16
+          Reading package lists... Done
+          Building dependency tree... Done
+          Reading state information... Done
+
+
+Проверяем статус кластера
+        denshuchmacher@nodea:~$ systemctl status postgresql
+        ● postgresql.service - PostgreSQL RDBMS
+             Loaded: loaded (/usr/lib/systemd/system/postgresql.service; enabled; preset: enabled)
+             Active: active (exited) since Tue 2026-05-26 22:05:32 UTC; 1min 18s ago
+           Main PID: 15153 (code=exited, status=0/SUCCESS)
+                CPU: 4ms
+        denshuchmacher@nodea:~$ sudo -u postgres psql -c "SELECT version();"
+        PostgreSQL 16.14 (Ubuntu 16.14-0ubuntu0.24.04.1) on x86_64-pc-linux-gnu, compiled by gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0, 64-bit
+
+
+скачиваем демо-database
+        wget https://edu.postgrespro.ru/demo-20250901-3m.sql.gz
+
+импортируем данные 
+         gunzip -c demo-20250901-3m.sql.gz | psql -U postgres
+
+
+первичный запуск pgbench
+          postgres@nodea:~$ pgbench -i -s 50 demo
+          dropping old tables...
+          NOTICE:  table "pgbench_accounts" does not exist, skipping
+          NOTICE:  table "pgbench_branches" does not exist, skipping
+          NOTICE:  table "pgbench_history" does not exist, skipping
+          NOTICE:  table "pgbench_tellers" does not exist, skipping
+          creating tables...
+          generating data (client-side)...
+          5000000 of 5000000 tuples (100%) done (elapsed 54.86 s, remaining 0.00 s)
+          vacuuming...
+          creating primary keys...
+          done in 132.35 s (drop tables 0.00 s, create tables 0.04 s, client-side generate 55.03 s, vacuum 23.98 s, primary keys 53.29 s).
+          postgres@nodea:~$ 
+          
+
+          postgres@nodea:~$ pgbench -c 10 -j 2 -T 60 demo
+          pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+          starting vacuum...end.
+          transaction type: <builtin: TPC-B (sort of)>
+          scaling factor: 50
+          query mode: simple
+          number of clients: 10
+          number of threads: 2
+          maximum number of tries: 1
+          duration: 60 s
+          number of transactions actually processed: 26121
+          number of failed transactions: 0 (0.000%)
+          latency average = 23.000 ms
+          initial connection time = 43.714 ms
+          tps = 434.790352 (without initial connection time)
+
+меняем параметры для экземпляра пг
+          postgres=# alter system set autovacuum_analyze_threshold = 500;
+          alter system set autovacuum_vacuum_threshold = 500;
+          alter system set  synchronous_commit = off;
+          SELECT pg_reload_conf();
+          ALTER SYSTEM
+          ALTER SYSTEM
+          ALTER SYSTEM
+           pg_reload_conf 
+          ----------------
+           t
+          (1 row)
+
+
+повторный запуск после перенастройки
+        
+        postgres@nodea:~$ pgbench -i -s 50 demo
+        dropping old tables...
+        creating tables...
+        generating data (client-side)...
+        5000000 of 5000000 tuples (100%) done (elapsed 54.41 s, remaining 0.00 s)
+        vacuuming...
+        creating primary keys...
+        done in 135.97 s (drop tables 0.16 s, create tables 0.02 s, client-side generate 56.11 s, vacuum 24.70 s, primary keys 54.97 s).
+        postgres@nodea:~$ pgbench -c 10 -j 2 -T 60 demo
+        pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+        starting vacuum...end.
+        transaction type: <builtin: TPC-B (sort of)>
+        scaling factor: 50
+        query mode: simple
+        number of clients: 10
+        number of threads: 2
+        maximum number of tries: 1
+        duration: 60 s
+        number of transactions actually processed: 40429
+        number of failed transactions: 0 (0.000%)
+        latency average = 14.853 ms
+        initial connection time = 33.236 ms
+        tps = 673.254914 (without initial connection time)
+        postgres@nodea:~$ 
+        
+        видим прирост 
+
+Выполняем кастомную нагрузку
+
+            скрипт для выполнения 
+            ===============  ./aaaa.sql  =====================================
+            
+            INSERT INTO bookings.airports_data (airport_code, country, airport_name, city, timezone, coordinates)
+            VALUES (
+                 CHR((random() *10 +  100)::int) ||  CHR((random() *10 + 100)::int) ||  CHR((random()  * 10+ 100)::int),
+                '{"en": "French Polynesia", "ru": "Французская Полинезия"}',
+                '{"en": "Vienna International Airport ||  trunc(random()*10000000) "}'::jsonb,
+                '{"en": "Vienna"}'::jsonb,
+                'Europe/Vienna',
+                '(6.1864,50.8231)'
+            );
+            SELECT * 
+            FROM bookings.airports_data 
+            WHERE airport_code = (
+                SELECT airport_code 
+                FROM bookings.airports_data 
+                ORDER BY random() 
+                LIMIT 1
+            );
+            SELECT   a.airport_code as code,
+                     a.airport_name,
+                     a.city,
+                     a.timezone
+            FROM     airports a
+            WHERE    a.city IN (
+                        SELECT aa.city
+                        FROM airports aa
+                        GROUP BY aa.city
+                        HAVING COUNT(*) > 1
+                     )
+            ORDER BY a.city, a.airport_code;
+            ============================
+            
+запускаем заново pgbench с кастомной  нагрузкой            
+            
+            pgbench -h localhost  -U postgres -d demo -s 30 -c 15 -j 2 -T 12 -M prepared -f ./aaaa.sql
+            pgbench: client 8 receiving
+            pgbench: client 8 receiving
+            pgbench: client 8 receiving
+            pgbench: client 8 receiving
+            pgbench: client 8 receiving
+            pgbench: client 8 executing script "/var/lib/postgresql/aaaa.sql"
+            pgbench: client 8 sending P_0
+            pgbench: client 8 receiving
+            pgbench: client 8 receiving
+            transaction type: /var/lib/postgresql/aaaa.sql
+            scaling factor: 30
+            query mode: prepared
+            number of clients: 15
+            number of threads: 2
+            maximum number of tries: 1
+            duration: 12 s
+            number of transactions actually processed: 223
+            number of failed transactions: 0 (0.000%)
+            latency average = 214.852 ms
+            initial connection time = 218.261 ms
+            tps = 69.815371 (without initial connection time)
+
+
+меняем настройки экземпляра 
+            postgres=# alter system set shared_buffers='256MB';
+            ALTER SYSTEM
+            postgres=# show work_mem;
+             work_mem 
+            ----------
+             4MB
+            (1 row)
+            
+            postgres=# alter system set work_mem='16MB';
+            ALTER SYSTEM
+            postgres=# show effective_cache_size;
+             effective_cache_size 
+            ----------------------
+             4GB
+            (1 row)
+            
+            postgres=# alter system set effective_cache_size='768MB';
+            ALTER SYSTEM
+
+запускаем заново pgbench
+            pgbench -h localhost  -U postgres -d demo -s 30 -c 15 -j 2 -T 12 -M prepared -f ./aaaa.sql
+            
+            transaction type: /var/lib/postgresql/sample/usda-r18-1.0/aaaa.sql
+            scaling factor: 30
+            query mode: prepared
+            number of clients: 15
+            number of threads: 2
+            maximum number of tries: 1
+            duration: 12 s
+            number of transactions actually processed: 27
+            number of failed transactions: 0 (0.000%)
+            latency average = 201.218 ms
+            initial connection time = 173.612 ms
+            tps = 81.374321 (without initial connection time)
+            postgres@nodea:~$ 
+
+
+
+
