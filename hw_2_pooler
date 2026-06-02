@@ -1,4 +1,4 @@
-Используем две ВМ: машину  с ПГ (nodea)? созданную в первой лабе и создаем дополнительно машину под пулер
+Используем две ВМ: машину  с ПГ (nodea), созданную в первой лабе и создаем дополнительно машину под пулер
         yc compute instance create \
         --name nodeb \
         --hostname nodeb \
@@ -77,7 +77,7 @@
       listen_addr = *
       listen_port = 6432
       unix_socket_dir = /var/run/postgresql
-      auth_type = md5
+      auth_type = scram-sha-256
       auth_file = /etc/pgbouncer/userlist.txt
       admin_users = postgres
       ignore_startup_parameters = extra_float_digits,geqo
@@ -276,8 +276,7 @@
         
         через пгбаунсер tps = 469  
 
-
-Вывод: pgbouncer  масштабировать с незначительными издержками ресурсы postgres для обеспечения коннектов к базе
+Вывод: pgbouncer позволяет масштабировать с незначительными издержками ресурсы postgres для обеспечения коннектов к базе
 рост tps говорит сам за себя 
 tps = 356 (на пг - более 500 макс-коннекшенов ) - на "раздутом"  мах_conn = 800
 и tps = 469 - через pgbouncer при мах_conn = 100
@@ -384,4 +383,36 @@ denshuchmacher@nodeb:/tmp/pgpool$ packet_write_wait: Connection to 89.169.131.62
 
 
 Вывод: pgpool значительно более ресурсоемкий пулер по сравнению с pgbouncer
-  
+
+
+Уще один тест с pgbouncer 
+postgres@nodea:~$ pgbench -p 6432 -c 20 -j 16 -T 10 -U pgbench -h 89.169.131.62  demo
+Password: 
+pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 20
+number of threads: 16
+maximum number of tries: 1
+duration: 10 s
+number of transactions actually processed: 3295
+number of failed transactions: 0 (0.000%)
+latency average = 60.981 ms
+initial connection time = 11.168 ms
+tps = 327.968388 (without initial connection time)
+
+
+---------------------------------------------------------------------
+| нагрузка в сессиях | max_conn в БД | tps   |  latency |  Pooler   |
+| ------------------ | ------------- | ----- | -------- |  latency  |
+| 520                | 1000          |  356  |   1458   |    -      |
+| 520                | 1000          |  262  |   1983   | pgbouncer |
+| 520                | 100           |  469  |   1107   | pgbouncer |
+| 520                | 100           |  ---  |    ---   | pgpool2   |
+| 20                 | 100           |  434  |     45   | pgpool2   |
+| 20                 | 100           |  327  |     60   | pgbouncer |
+---------------------------------------------------------------------
+
+Общий вывод: pgpool2 быстрее, чем pgbouncer, но более требователен к ресурсам - оперативной памяти.
