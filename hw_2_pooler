@@ -1,0 +1,387 @@
+Используем две ВМ: машину  с ПГ (nodea)? созданную в первой лабе и создаем дополнительно машину под пулер
+        yc compute instance create \
+        --name nodeb \
+        --hostname nodeb \
+        --cores 2 \
+        --memory 2 \
+        --create-boot-disk size=15G,type=network-ssd,image-folder-id=standard-images,image-family=ubuntu-2404-lts \
+        --network-interface subnet-name=default-ru-central1-b,nat-ip-version=ipv4 \
+        --zone ru-central1-b \
+        --metadata-from-file ssh-keys=/home/aster/.ssh/id_rsa.pub
+
+
+  В кластере ПГ создаем пользователя для тестов
+          CREATE USER pgbench WITH PASSWORD 'pgbench';
+          GRANT CONNECT ON DATABASE demo TO pgbench;
+          GRANT ALL PRIVILEGES ON DATABASE demo TO pgbench;
+          
+          \c demo
+          GRANT USAGE, CREATE ON SCHEMA public TO pgbench;
+          GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO pgbench;
+          GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO pgbench;
+          GRANT ALL PRIVILEGES ON ALL FUNCTIONS IN SCHEMA public TO pgbench;
+          
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+          GRANT ALL PRIVILEGES ON TABLES TO pgbench;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+          GRANT ALL PRIVILEGES ON SEQUENCES TO pgbench;
+          ALTER DEFAULT PRIVILEGES IN SCHEMA public
+          GRANT ALL PRIVILEGES ON FUNCTIONS TO pgbench;
+
+
+Обновляем бинарники из дефолтного репа 
+        sudo apt-get update
+        sudo apt-get upgrade
+        update-initramfs: Generating /boot/initrd.img-6.8.0-106-generic
+        Setting up packagekit (1.2.8-2ubuntu1.5) ...
+        Setting up packagekit-tools (1.2.8-2ubuntu1.5) ...
+        denshuchmacher@nodeb:~$ lsb_release -a
+        No LSB modules are available.
+        Distributor ID: Ubuntu
+        Description:    Ubuntu 24.04.4 LTS
+        Release:        24.04
+        Codename:       noble
+
+
+
+Устанавливаем pgbouncer
+        sudo apt-get install pgbouncer -y
+        
+        Creating config file /etc/postgresql-common/createcluster.conf with new version
+        Building PostgreSQL dictionaries from installed myspell/hunspell packages...
+        Removing obsolete dictionary files:
+        Created symlink /etc/systemd/system/multi-user.target.wants/postgresql.service → /usr/lib/systemd/system/postgresql.service.
+        Setting up pgbouncer (1.22.0-1build4) ...
+        Created symlink /etc/systemd/system/multi-user.target.wants/pgbouncer.service → /usr/lib/systemd/system/pgbouncer.service.
+        Processing triggers for man-db (2.12.0-4build2) ...
+        Processing triggers for libc-bin (2.39-0ubuntu8.7) ...
+        Scanning processes...
+        Scanning linux images...
+        Running kernel seems to be up-to-date.
+        No services need to be restarted.
+        No containers need to be restarted.
+        No user sessions are running outdated binaries.
+
+
+Настраиваем ини-файл
+
+          sudo vi /etc/pgbouncer/pgbouncer.ini
+        =========
+        [databases]
+      postgres = host=93.77.185.251 port=5432 dbname=demo
+      * = host=93.77.185.251 port=5432
+
+      [pgbouncer]
+      logfile = /var/log/postgresql/pgbouncer.log
+      pidfile = /var/run/postgresql/pgbouncer.pid
+      listen_addr = *
+      listen_port = 6432
+      unix_socket_dir = /var/run/postgresql
+      auth_type = md5
+      auth_file = /etc/pgbouncer/userlist.txt
+      admin_users = postgres
+      ignore_startup_parameters = extra_float_digits,geqo
+      pool_mode = session
+      server_reset_query = DISCARD ALL
+      max_client_conn = 10000
+      default_pool_size = 800
+      reserve_pool_size = 150
+      reserve_pool_timeout = 1
+      max_db_connections = 1000
+      pkt_buf = 8192
+      listen_backlog = 4096
+      log_connections = 0
+      log_disconnections = 0
+        =======
+
+Настраиваем сервис 
+            denshuchmacher@nodeb:~$ sudo cat   /lib/systemd/system/pgbouncer.service
+          [Unit]
+          Description=connection pooler for PostgreSQL
+          Documentation=man:pgbouncer(1)
+          Documentation=https://www.pgbouncer.org/
+          After=network.target
+          #Requires=pgbouncer.socket
+          
+          [Service]
+          Type=notify
+          User=postgres
+          ExecStart=/usr/sbin/pgbouncer /etc/pgbouncer/pgbouncer.ini
+          ExecReload=/bin/kill -HUP $MAINPID
+          KillSignal=SIGINT
+          #LimitNOFILE=1024
+          LimitNOFILE=15000
+          
+          [Install]
+          WantedBy=multi-user.target
+
+          denshuchmacher@nodeb:~$ sudo systemctl daemon-reload
+          denshuchmacher@nodeb:~$ sudo systemctl restart pgbouncer
+          denshuchmacher@nodeb:~$ sudo systemctl status pgbouncer
+          ● pgbouncer.service - connection pooler for PostgreSQL
+               Loaded: loaded (/usr/lib/systemd/system/pgbouncer.service; enabled; preset: enabled)
+               Active: active (running) since Sun 2026-05-31 20:27:04 UTC; 13s ago
+                 Docs: man:pgbouncer(1)
+                       https://www.pgbouncer.org/
+             Main PID: 7454 (pgbouncer)
+                Tasks: 2 (limit: 2315)
+               Memory: 1.1M (peak: 1.4M)
+                  CPU: 9ms
+               CGroup: /system.slice/pgbouncer.service
+                       └─7454 /usr/sbin/pgbouncer /etc/pgbouncer/pgbouncer.ini
+          
+          May 31 20:27:04 nodeb systemd[1]: Starting pgbouncer.service - connection pooler for PostgreSQL...
+          May 31 20:27:04 nodeb pgbouncer[7454]: kernel file descriptor limit: 15000 (hard: 15000); max_client_conn: 10000, max expected fd use:>
+          May 31 20:27:04 nodeb pgbouncer[7454]: listening on 0.0.0.0:6432
+          May 31 20:27:04 nodeb pgbouncer[7454]: listening on [::]:6432
+          May 31 20:27:04 nodeb pgbouncer[7454]: listening on unix:/var/run/postgresql/.s.PGSQL.6432
+          May 31 20:27:04 nodeb pgbouncer[7454]: process up: PgBouncer 1.22.0, libevent 2.1.12-stable (epoll), adns: c-ares 1.27.0, tls: OpenSSL>
+          May 31 20:27:04 nodeb systemd[1]: Started pgbouncer.service - connection pooler for PostgreSQL.
+
+
+  Добавляем юзерлист для тестирования от пользователя pgbench
+
+          denshuchmacher@nodeb:/etc/pgbouncer$ sudo cat  /etc/pgbouncer/userlist.txt
+          "pgbench" "pgbench"
+
+
+Подготавливаем pgbench
+          postgres@nodea:~$ pgbench -p 5432 -i -U pgbench -h localhost demo
+          Password:
+          dropping old tables...
+          NOTICE:  table "pgbench_accounts" does not exist, skipping
+          NOTICE:  table "pgbench_branches" does not exist, skipping
+          NOTICE:  table "pgbench_history" does not exist, skipping
+          NOTICE:  table "pgbench_tellers" does not exist, skipping
+          creating tables...
+          generating data (client-side)...
+          100000 of 100000 tuples (100%) done (elapsed 0.02 s, remaining 0.00 s)
+          vacuuming...
+          creating primary keys...
+          done in 0.51 s (drop tables 0.05 s, create tables 0.09 s, client-side generate 0.18 s, vacuum 0.12 s, primary keys 0.08 s).
+          postgres@nodea:~$
+
+Первичный запуск 
+          pgbench -p 5432 -c 520 -j 16 -T 60 -U pgbench -h localhost demo
+          
+          postgres@nodea:~$ pgbench -p 5432 -c 520 -j 16 -T 60 -U pgbench -h localhost demo
+          Password:
+          pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+          starting vacuum...end.
+          transaction type: <builtin: TPC-B (sort of)>
+          scaling factor: 1
+          query mode: simple
+          number of clients: 520
+          number of threads: 16
+          maximum number of tries: 1
+          duration: 60 s
+          number of transactions actually processed: 19747
+          number of failed transactions: 0 (0.000%)
+          latency average = 1458.822 ms
+          initial connection time = 6406.357 ms
+          tps = 356.452067 (without initial connection time)
+          postgres@nodea:~$
+          
+            Начальное значение с локалхоста напрямую - tps = 356 (на пг - более 500 макс-коннекшенов )
+
+
+  Запуск pgbench через пгбаунсер
+        postgres@nodea:~$ pgbench -p 6432 -c 520 -j 16 -T 60 -U pgbench -h 111.88.251.22 demo
+        Password:
+        pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+        starting vacuum...end.
+        2026-05-31 21:16:08.869 UTC [3792] LOG:  checkpoint starting: time
+        transaction type: <builtin: TPC-B (sort of)>
+        scaling factor: 1
+        query mode: simple
+        number of clients: 520
+        number of threads: 16
+        maximum number of tries: 1
+        duration: 60 s
+        number of transactions actually processed: 16203
+        number of failed transactions: 0 (0.000%)
+        latency average = 1983.302 ms
+        initial connection time = 122.211 ms
+        tps = 262.189006 (without initial connection time)
+        
+        
+        через пгбаунсер tps = 262 ( 1 к 1)
+
+Снижаем на постгресе max_connection до 100
+         alter system set max_connection = 100;
+
+
+Меняем настройки пгбаунсера 
+        denshuchmacher@nodeb:~$ sudo cat  /etc/pgbouncer/pgbouncer.ini
+        [databases]
+        postgres = host=93.77.185.251 port=5432 dbname=demo
+        * = host=93.77.185.251 port=5432
+        
+        [pgbouncer]
+        logfile = /var/log/postgresql/pgbouncer.log
+        pidfile = /var/run/postgresql/pgbouncer.pid
+        listen_addr = *
+        listen_port = 6432
+        unix_socket_dir = /var/run/postgresql
+        auth_type = md5
+        auth_file = /etc/pgbouncer/userlist.txt
+        admin_users = postgres
+        ignore_startup_parameters = extra_float_digits,geqo
+        pool_mode = transaction
+        server_reset_query = DISCARD ALL
+        max_client_conn = 10000
+        default_pool_size = 80
+        reserve_pool_size = 15
+        reserve_pool_timeout = 1
+        max_db_connections = 100
+        pkt_buf = 8192
+        listen_backlog = 4096
+        log_connections = 0
+        log_disconnections = 0
+        server_idle_timeout = 600
+        client_idle_timeout = 0
+        query_timeout = 0
+        client_login_timeout = 60
+        denshuchmacher@nodeb:~$
+
+  Перегружаем pgbouncer
+          sudo systemctl restart pgbouncer
+
+Меняем настройки кернела 
+        denshuchmacher@nodeb:~$ sudo sysctl -p
+        fs.file-max = 100000
+        net.core.somaxconn = 65535
+        net.ipv4.tcp_max_syn_backlog = 65535
+        net.core.netdev_max_backlog = 65535
+
+Проводим тестовый запуск pgbench 
+
+        postgres@nodea:~$ pgbench -p 6432 -c 520 -j 16 -T 60 -U pgbench -h 111.88.251.22 demo
+        Password:
+        pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+        starting vacuum...end.
+        transaction type: <builtin: TPC-B (sort of)>
+        scaling factor: 1
+        query mode: simple
+        number of clients: 520
+        number of threads: 16
+        maximum number of tries: 1
+        duration: 60 s
+        number of transactions actually processed: 28636
+        number of failed transactions: 0 (0.000%)
+        latency average = 1106.759 ms
+        initial connection time = 127.850 ms
+        tps = 469.840270 (without initial connection time)
+        
+        
+        через пгбаунсер tps = 469  
+
+
+Вывод: pgbouncer  масштабировать с незначительными издержками ресурсы postgres для обеспечения коннектов к базе
+рост tps говорит сам за себя 
+tps = 356 (на пг - более 500 макс-коннекшенов ) - на "раздутом"  мах_conn = 800
+и tps = 469 - через pgbouncer при мах_conn = 100
+  при одинаковой нагрузке
+
+==============================================================
+  Попробовал использовать Pgpool в порядке сравнения
+
+устанавливаем pgpool из дефолтного репа
+        sudo apt-get install pgpool2
+
+
+pgpool работает как демон, поэтому приходится килять процессы 
+        denshuchmacher@nodeb:~$ sudo pkill -f "pgpool"
+          Запуск 
+          denshuchmacher@nodeb:~$ sudo pgpool -n -D & 
+
+  Заполняем pool_hba.conf
+
+          host	all	    pgbench 	all	      trust
+            
+Заполняем конфиг pgpool.conf
+            denshuchmacher@nodeb:~$ sudo cat  /etc/pgpool2/pgpool.conf
+          listen_addresses = '*'
+          port = 9999
+          backend_hostname0 = '51.250.15.131'
+          backend_port0 = 5432
+          backend_weight0 = 1
+          backend_data_directory0 = '/var/lib/postgresql/16/main'
+          log_destination = 'stderr'
+          logging_collector = on
+          log_directory = '/tmp/pgpool/'
+          log_filename = 'pgpool-%Y-%m-%d_%H%M%S.log'
+          num_init_children = 100            # Number of concurrent sessions allowed
+          max_pool = 100                      # Number of connection pool caches per connection
+                                             # (change requires restart)
+          child_life_time = 300
+                                             # Pool exits after being idle for this many seconds
+          child_max_connections = 0
+                                             # Pool exits after receiving that many connections
+                                             # 0 means no exit
+          connection_life_time = 0
+                                             # Connection to backend closes after being idle for this many seconds
+                                             # 0 means no close
+          client_idle_limit = 0
+                                             # Client is disconnected after being idle for that many seconds
+                                             # (even inside an explicit transactions!)
+                                             # 0 means no disconnection
+          #------------------------------------------------------------------------------
+          # CONNECTION POOLING
+          #------------------------------------------------------------------------------
+          connection_cache = on
+                                             # Activate connection pools
+                                             # (change requires restart)
+                                             # Semicolon separated list of queries
+                                             # to be issued at the end of a session
+                                             # The default is for 8.3 and later
+          reset_query_list = 'ABORT; DISCARD ALL'
+
+Перегружаем  pgpool
+        denshuchmacher@nodeb:~$ sudo pkill -f "pgpool"
+        denshuchmacher@nodeb:~$ sudo pgpool -n -D & 
+        
+
+Запускаем тест 
+            postgres@nodea:~$ pgbench -p 9999 -c 520 -j 16 -T 5 -U pgbench -h 89.169.131.62 demo
+            ^C
+            тест завис по причине невозможности развернуть запрошенное количество коннектов
+
+Запускаем тест повторно, снизив количество коннектов  
+            postgres@nodea:~$ pgbench -p 9999 -c 20 -j 16 -T 60 -U pgbench -h 89.169.131.62 demo
+            pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+            starting vacuum...end.
+            transaction type: <builtin: TPC-B (sort of)>
+            scaling factor: 1
+            query mode: simple
+            number of clients: 20
+            number of threads: 16
+            maximum number of tries: 1
+            duration: 60 s
+            number of transactions actually processed: 26100
+            number of failed transactions: 0 (0.000%)
+            latency average = 45.984 ms
+            initial connection time = 45.890 ms
+            tps = 434.936449 (without initial connection time)
+            postgres@nodea:~$ pgbench -p 9999 -c 520 -j 16 -T 60 -U pgbench -h 89.169.131.62 demo
+            pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+            starting vacuum...end.
+
+  
+  Сразу хочется отметить, что pgpool окаался очень требователен к памяти и на скромной ВМ обеспечить 500 коннектов не удалось
+
+Успешный тест прошел с 20 коннектами.
+
+  denshuchmacher@nodeb:/tmp/pgpool$ sudo cat pgpool-2026-06-02_001655.log
+2026-06-02 00:16:55.611: main pid 130817: LOG:  health_check_stats_shared_memory_size: requested size: 12288
+2026-06-02 00:16:55.611: main pid 130817: LOG:  memory cache initialized
+2026-06-02 00:16:55.611: main pid 130817: DETAIL:  memcache blocks :64
+2026-06-02 00:16:55.611: main pid 130817: LOG:  allocating (2204892192) bytes of shared memory segment
+2026-06-02 00:16:55.611: main pid 130817: LOG:  allocating shared memory segment of size: 2204892192 
+2026-06-02 00:16:55.611: main pid 130817: FATAL:  could not create shared memory for request size: 2204892192
+2026-06-02 00:16:55.611: main pid 130817: DETAIL:  shared memory creation failed with error "Cannot allocate memory"
+denshuchmacher@nodeb:/tmp/pgpool$ packet_write_wait: Connection to 89.169.131.62 port 22: Broken pipe
+
+
+Вывод: pgpool значительно более ресурсоемкий пулер по сравнению с pgbouncer
+  
