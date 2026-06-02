@@ -296,7 +296,7 @@ pgpool работает как демон, поэтому приходится �
 
   Заполняем pool_hba.conf
 
-          host	all	    pgbench 	all	      trust
+          host	all	    pgbench 	all    scram-sha-256
             
 Заполняем конфиг pgpool.conf
             denshuchmacher@nodeb:~$ sudo cat  /etc/pgpool2/pgpool.conf
@@ -404,6 +404,131 @@ initial connection time = 11.168 ms
 tps = 327.968388 (without initial connection time)
 
 
+=======================================
+Пулер pgagroal
+
+Для установки подключаем репозитарий.
+        denshuchmacher@nodeb:~$ sudo install -d /usr/share/postgresql-common/pgdg
+        denshuchmacher@nodeb:~$ sudo curl -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc --fail https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                         Dload  Upload   Total   Spent    Left  Speed
+        100  4812  100  4812    0     0   6812      0 --:--:-- --:--:-- --:--:--  6815
+        sudo sh -c 'echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+
+Актуализируем реозитарии 
+        denshuchmacher@nodeb:~$ sudo apt update
+        Hit:1 http://mirror.yandex.ru/ubuntu noble InRelease
+        Get:2 http://mirror.yandex.ru/ubuntu noble-updates InRelease [126 kB]                                                    
+        Hit:3 http://mirror.yandex.ru/ubuntu noble-backports InRelease                                                           
+        Get:4 http://security.ubuntu.com/ubuntu noble-security InRelease [126 kB]                                                
+        Get:5 https://apt.postgresql.org/pub/repos/apt noble-pgdg InRelease [180 kB]
+        Get:6 http://mirror.yandex.ru/ubuntu noble-updates/main amd64 Packages [2052 kB]
+        Get:7 http://mirror.yandex.ru/ubuntu noble-updates/universe amd64 Packages [1695 kB]
+        Get:8 http://security.ubuntu.com/ubuntu noble-security/main amd64 Packages [1741 kB]     
+        Get:9 http://security.ubuntu.com/ubuntu noble-security/universe amd64 Packages [1194 kB]
+        Get:10 http://security.ubuntu.com/ubuntu noble-security/universe Translation-en [231 kB]
+        Get:11 https://apt.postgresql.org/pub/repos/apt noble-pgdg/main amd64 Packages [560 kB]
+        Fetched 7907 kB in 2s (4239 kB/s)                     
+        Reading package lists... Done
+        Building dependency tree... Done
+        Reading state information... Done
+        19 packages can be upgraded. Run 'apt list --upgradable' to see them.
+
+
+Устанавливаем pgagroal из репозитария
+        denshuchmacher@nodeb:~$ sudo apt install -y pgagroal
+        Reading package lists... Done
+        Building dependency tree... Done
+        Reading state information... Done
+        The following additional packages will be installed:
+          liburing2
+        The following NEW packages will be installed:
+          liburing2 pgagroal
+        0 upgraded, 2 newly installed, 0 to remove and 19 not upgraded.
+        Need to get 595 kB of archives.
+        After this operation, 1587 kB of additional disk space will be used.
+        Get:1 http://mirror.yandex.ru/ubuntu noble/main amd64 liburing2 amd64 2.5-1build1 [21.1 kB]
+        Get:2 https://apt.postgresql.org/pub/repos/apt noble-pgdg/main amd64 pgagroal amd64 2.1.0-1.pgdg24.04+1 [574 kB]
+        Fetched 595 kB in 0s (1993 kB/s)                       
+        Selecting previously unselected package liburing2:amd64.
+        (Reading database ... 109073 files and directories currently installed.)
+        Preparing to unpack .../liburing2_2.5-1build1_amd64.deb ...
+        Unpacking liburing2:amd64 (2.5-1build1) ...
+        Selecting previously unselected package pgagroal.
+        Preparing to unpack .../pgagroal_2.1.0-1.pgdg24.04+1_amd64.deb ...
+        Unpacking pgagroal (2.1.0-1.pgdg24.04+1) ...
+        Setting up liburing2:amd64 (2.5-1build1) ...
+        Setting up pgagroal (2.1.0-1.pgdg24.04+1) ...
+        Created symlink /etc/systemd/system/sockets.target.wants/pgagroal.socket → /usr/lib/systemd/system/pgagroal.socket.
+        Processing triggers for man-db (2.12.0-4build2) ...
+        Processing triggers for libc-bin (2.39-0ubuntu8.7) ...
+        Scanning processes...                                                                                                     
+        Scanning linux images...                                                                                                  
+        
+        Running kernel seems to be up-to-date.
+        No services need to be restarted.
+        No containers need to be restarted.
+        No user sessions are running outdated binaries.
+        No VM guests are running outdated hypervisor (qemu) binaries on this host.
+
+
+Настраиваем конфиг pgagroal
+        denshuchmacher@nodeb:~$ sudo cat   /etc/pgagroal/pgagroal.conf
+        [pgagroal]
+        host = *
+        port = 2345
+        
+        log_type = console
+        log_level = info
+        log_path = 
+        
+        max_connections = 800
+        idle_timeout = 600
+        validation = off
+        unix_socket_dir = /run/postgresql
+        ev_backend = auto
+        
+        [primary]
+        host = 51.250.15.131
+        port = 5432
+
+denshuchmacher@nodeb:~$ sudo cat   /etc/pgagroal/pgagraol_hba.conf
+host    all         pgbench     all   scram-sha-256
+
+denshuchmacher@nodeb:~$ sudo cat   /etc/pgagroal/pgagroal_users.conf
+"pgbench" "pgbench"
+
+Рестартуем 
+denshuchmacher@nodeb:/etc/pgagroal$ sudo systemctl stop pgagroal
+denshuchmacher@nodeb:/etc/pgagroal$ sudo systemctl start pgagroal
+denshuchmacher@nodeb:/etc/pgagroal$ sudo systemctl status pgagroal
+● pgagroal.service - High-performance connection pool for PostgreSQL
+     Loaded: loaded (/usr/lib/systemd/system/pgagroal.service; enabled; preset: enabled)
+     Active: active (running) since Tue 2026-06-02 15:26:03 UTC; 1s ago
+TriggeredBy: ● pgagroal.socket
+       Docs: man:pgagroal(1)
+             https://pgagroal.github.io/
+
+Проводим испытания через pgagroal
+postgres@nodea:~$ pgbench -p 2345 -c 20 -j 16 -T 10 -U pgbench -h 89.169.131.62  demo
+pgbench (16.14 (Ubuntu 16.14-0ubuntu0.24.04.1))
+starting vacuum...end.
+transaction type: <builtin: TPC-B (sort of)>
+scaling factor: 1
+query mode: simple
+number of clients: 20
+number of threads: 16
+maximum number of tries: 1
+duration: 10 s
+number of transactions actually processed: 3101
+number of failed transactions: 0 (0.000%)
+latency average = 64.518 ms
+initial connection time = 99.297 ms
+tps = 309.990883 (without initial connection time)
+
+
+
+
 ---------------------------------------------------------------------
 | нагрузка в сессиях | max_conn в БД | tps   |  latency |  Pooler   |
 | ------------------ | ------------- | ----- | -------- |  latency  |
@@ -413,7 +538,10 @@ tps = 327.968388 (without initial connection time)
 | 520                | 100           |  ---  |    ---   | pgpool2   |
 | 20                 | 100           |  434  |     45   | pgpool2   |
 | 20                 | 100           |  327  |     60   | pgbouncer |
+| 20                 | 100           |  310  |     64   | pgagroal  |
 ---------------------------------------------------------------------
 
 Общий вывод: pgpool2 быстрее, чем pgbouncer, но более требователен к ресурсам - оперативной памяти. Следовательно,
-             pgbouncer предпочтительнее использовать там, где ресурсы ограничены.
+             pgbouncer предпочтительнее использовать там, где ресурсы ограничены и нужна надежность. 
+             Протестирован также pgagroal, который   показывает характеристики схожие с pgbouncer.
+
